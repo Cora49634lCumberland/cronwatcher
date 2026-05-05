@@ -79,15 +79,31 @@ class HeartbeatTracker:
             overdue = record.is_overdue(grace_period_seconds)
             if overdue:
                 record.missed_count += 1
-                logger.error(
+                logger.warning(
                     "Job '%s' is overdue (missed_count=%d).",
-                    name, record.missed_count
+                    name,
+                    record.missed_count,
                 )
             results[name] = overdue
         return results
 
-    def get_record(self, name: str) -> JobRecord:
-        """Retrieve the JobRecord for a given job name."""
+    def unregister(self, name: str) -> None:
+        """Remove a previously registered job from monitoring.
+
+        Raises:
+            KeyError: If the job name is not currently registered.
+        """
         if name not in self._jobs:
-            raise KeyError(f"Unknown job '{name}'.")
+            raise KeyError(f"Unknown job '{name}'. Cannot unregister.")
+        del self._jobs[name]
+        logger.info("Unregistered job '%s'", name)
+
+    def status(self, name: str) -> JobRecord:
+        """Return the JobRecord for the given job name.
+
+        Raises:
+            KeyError: If the job name is not currently registered.
+        """
+        if name not in self._jobs:
+            raise KeyError(f"Unknown job '{name}'. Register it first.")
         return self._jobs[name]
