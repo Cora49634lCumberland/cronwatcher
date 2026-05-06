@@ -1,70 +1,78 @@
-"""Generates summary reports from job execution history."""
-
-from __future__ import annotations
+"""Generates human-readable summaries of job execution history."""
 
 from dataclasses import dataclass
 from typing import List, Optional
 
-from cronwatcher.history import HistoryStore, JobHistory
+from cronwatcher.history import JobHistory, ExecutionEvent
 
 
 @dataclass
 class JobSummary:
+    """Aggregated statistics for a single job's execution history."""
     job_name: str
-    total_executions: int
-    average_drift_seconds: Optional[float]
-    max_drift_seconds: Optional[float]
-    last_executed_at: Optional[float]
+    total_runs: int
+    successful_runs: int
+    failed_runs: int
+    avg_duration_seconds: Optional[float]
+    last_run_at: Optional[str]
 
     def __str__(self) -> str:
-        last = (
-            f"{self.last_executed_at:.0f}"
-            if self.last_executed_at is not None
-            else "never"
+        success_rate = (
+            f"{100 * self.successful_runs / self.total_runs:.1f}%"
+            if self.total_runs > 0
+            else "N/A"
         )
         avg = (
-            f"{self.average_drift_seconds:.1f}s"
-            if self.average_drift_seconds is not None
-            else "n/a"
-        )
-        max_d = (
-            f"{self.max_drift_seconds:.1f}s"
-            if self.max_drift_seconds is not None
-            else "n/a"
+            f"{self.avg_duration_seconds:.2f}s"
+            if self.avg_duration_seconds is not None
+            else "N/A"
         )
         return (
-            f"[{self.job_name}] executions={self.total_executions} "
-            f"avg_drift={avg} max_drift={max_d} last_seen={last}"
+            f"[{self.job_name}] runs={self.total_runs}, "
+            f"success_rate={success_rate}, avg_duration={avg}, "
+            f"last_run={self.last_run_at or 'never'}"
         )
 
 
 class HistoryReporter:
-    """Produces human-readable and structured summaries from a HistoryStore."""
+    """Produces summaries from a JobHistory store."""
 
-    def __init__(self, store: HistoryStore) -> None:
-        self.store = store
+    def __init__(self, history: JobHistory) -> None:
+        self._history = history
 
     def summarize_job(self, job_name: str) -> JobSummary:
-        jh: JobHistory = self.store.get(job_name)
-        events = jh.events
+        """Return a JobSummary for the given job name."""
+        events: List[ExecutionEvent] = self._history.get_events(job_name)
 
-        drifts = [e.drift_seconds for e in events if e.drift_seconds is not None]
-        avg_drift = (sum(drifts) / len(drifts)) if drifts else None
-        max_drift = max(drifts, default=None)
-        last_exec = events[-1].executed_at if events else None
+        total = len(events)
+        successful = sum(1 for e in events if e.success)
+        failed = total - successful
+
+        durations = [
+            e.duration_seconds
+            for e in events
+            if e.duration_seconds is not None
+        ]
+        avg_duration = sum(durations) / len(durations) if durations else None
+
+        last_event = max(events, key=lambda e: e.executed_at, default=None)
+        last_run_at = last_event.executed_at if last_event else None
 
         return JobSummary(
             job_name=job_name,
-            total_executions=len(events),
-            average_drift_seconds=avg_drift,
-            max_drift_seconds=max_drift,
-            last_executed_at=last_exec,
+            total_runs=total,
+            successful_runs=successful,
+            failed_runs=failed,
+            avg_duration_seconds=avg_duration,
+            last_run_at=last_run_at,
         )
 
     def summarize_all(self) -> List[JobSummary]:
-        return [self.summarize_job(name) for name in self.store.all_jobs()]
+        """Return summaries for every job that has recorded history."""
+        return [self.summarize_job(name) for name in self._history.job_names()]
 
-    def report_text(self) -> str:
+    def report(self) -> str:
+        """Render a full text report for all jobs."""
         summaries = self.summarize_all()
         if not summaries:
             return "No job history available."
