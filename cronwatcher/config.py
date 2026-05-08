@@ -1,79 +1,62 @@
-"""Configuration loader for cronwatcher.
+"""Configuration loading for cronwatcher."""
 
-Loads job definitions from a YAML/dict config and populates a
-ScheduleRegistry so the rest of the system has a single source of truth.
-
-Expected config shape (YAML example)::
-
-    jobs:
-      - name: backup
-        schedule: "0 2 * * *"
-        description: "Nightly backup"
-        tolerance_seconds: 300
-      - name: heartbeat
-        schedule: "* * * * *"
-"""
-
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, Dict, List
 
 try:
     import yaml
+    _YAML_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    yaml = None  # type: ignore[assignment]
+    _YAML_AVAILABLE = False
 
-from cronwatcher.scheduler import CronSchedule, ScheduleRegistry
-
-
-DEFAULT_TOLERANCE_SECONDS = 60
+from cronwatcher.job_registry import JobRegistry
 
 
-def load_from_dict(config: dict[str, Any]) -> ScheduleRegistry:
-    """Build a ScheduleRegistry from a plain Python dict.
+def load_from_dict(data: Dict[str, Any]) -> JobRegistry:
+    """Build a JobRegistry from a parsed configuration dictionary.
 
-    Args:
-        config: Mapping with a top-level ``jobs`` list.
+    Expected structure::
 
-    Returns:
-        Populated :class:`ScheduleRegistry`.
-
-    Raises:
-        KeyError: If a job entry is missing required fields.
-        ValueError: If a cron expression is invalid.
+        jobs:
+          - name: my_job
+            expression: "* * * * *"
+            grace_seconds: 60
+            enabled: true
+            tags:
+              - production
     """
-    registry = ScheduleRegistry()
-    jobs = config.get("jobs", [])
-    for entry in jobs:
-        schedule = CronSchedule(
-            job_name=entry["name"],
-            expression=entry["schedule"],
-            description=entry.get("description", ""),
-            tolerance_seconds=int(
-                entry.get("tolerance_seconds", DEFAULT_TOLERANCE_SECONDS)
-            ),
-        )
-        registry.register(schedule)
-    return registry
+    if not isinstance(data, dict):
+        raise TypeError("Configuration must be a mapping")
+
+    raw_jobs: List[dict] = data.get("jobs", [])
+    if not isinstance(raw_jobs, list):
+        raise ValueError("'jobs' must be a list")
+
+    return JobRegistry.from_config_list(raw_jobs)
 
 
-def load_from_yaml(path: str) -> ScheduleRegistry:
-    """Load configuration from a YAML file.
+def load_from_yaml(path: str) -> JobRegistry:
+    """Load a JobRegistry from a YAML configuration file.
 
     Args:
         path: Filesystem path to the YAML config file.
 
     Returns:
-        Populated :class:`ScheduleRegistry`.
+        A populated JobRegistry.
 
     Raises:
         ImportError: If PyYAML is not installed.
-        FileNotFoundError: If *path* does not exist.
+        FileNotFoundError: If the path does not exist.
     """
-    if yaml is None:  # pragma: no cover
-        raise ImportError("PyYAML is required: pip install pyyaml")
+    if not _YAML_AVAILABLE:  # pragma: no cover
+        raise ImportError(
+            "PyYAML is required to load YAML configs. "
+            "Install it with: pip install pyyaml"
+        )
 
     with open(path, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+        data = yaml.safe_load(fh)
+
+    if data is None:
+        data = {}
 
     return load_from_dict(data)
