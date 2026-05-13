@@ -37,6 +37,10 @@ class TestDriftRecord:
         record = DriftRecord(job_name="j", expected_at=NOW, actual_at=NOW - timedelta(seconds=5))
         assert record.is_late is False
 
+    def test_is_late_false_when_on_time(self):
+        record = DriftRecord(job_name="j", expected_at=NOW, actual_at=NOW)
+        assert record.is_late is False
+
     def test_repr_contains_job_name(self):
         record = DriftRecord(job_name="myjob", expected_at=NOW, actual_at=NOW + timedelta(seconds=10))
         assert "myjob" in repr(record)
@@ -47,6 +51,13 @@ class TestDriftAnalyzer:
         analyzer.record("job1", NOW, NOW + timedelta(seconds=10))
         assert len(analyzer.history["job1"]) == 1
 
+    def test_record_multiple_jobs(self, analyzer):
+        analyzer.record("job1", NOW, NOW + timedelta(seconds=10))
+        analyzer.record("job2", NOW, NOW + timedelta(seconds=20))
+        assert len(analyzer.history) == 2
+        assert len(analyzer.history["job1"]) == 1
+        assert len(analyzer.history["job2"]) == 1
+
     def test_is_drifting_below_threshold(self, analyzer):
         analyzer.record("job1", NOW, NOW + timedelta(seconds=30))
         assert analyzer.is_drifting("job1") is False
@@ -54,6 +65,10 @@ class TestDriftAnalyzer:
     def test_is_drifting_above_threshold(self, analyzer):
         analyzer.record("job1", NOW, NOW + timedelta(seconds=120))
         assert analyzer.is_drifting("job1") is True
+
+    def test_is_drifting_exactly_at_threshold(self, analyzer):
+        analyzer.record("job1", NOW, NOW + timedelta(seconds=60))
+        assert analyzer.is_drifting("job1") is False
 
     def test_is_drifting_no_history(self, analyzer):
         assert analyzer.is_drifting("unknown") is False
@@ -74,3 +89,10 @@ class TestDriftAnalyzer:
         analyzer.record("job1", NOW, NOW + timedelta(seconds=10))
         analyzer.clear_history("job1")
         assert "job1" not in analyzer.history
+
+    def test_clear_history_does_not_affect_other_jobs(self, analyzer):
+        analyzer.record("job1", NOW, NOW + timedelta(seconds=10))
+        analyzer.record("job2", NOW, NOW + timedelta(seconds=20))
+        analyzer.clear_history("job1")
+        assert "job1" not in analyzer.history
+        assert "job2" in analyzer.history
