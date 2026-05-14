@@ -1,80 +1,70 @@
-"""WebhookDispatcher: fan-out alerts to multiple WebhookNotifier endpoints."""
+"""Dispatch alerts to multiple webhook notifiers and collect results."""
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import List
 
 from cronwatcher.alerting import Alert
 from cronwatcher.webhook_notifier import WebhookNotifier
 
-logger = logging.getLogger(__name__)
-
 
 @dataclass
 class DispatchResult:
-    """Summary of a single fan-out dispatch attempt."""
-
+    job_name: str
     total: int
     succeeded: int
     failed: int
-    failures: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
 
     @property
     def all_succeeded(self) -> bool:
-        return self.failed == 0
+        return self.failed == 0 and self.total > 0
 
     def __repr__(self) -> str:
         return (
-            f"DispatchResult(total={self.total}, succeeded={self.succeeded}, "
-            f"failed={self.failed})"
+            f"DispatchResult(job={self.job_name!r}, "
+            f"succeeded={self.succeeded}/{self.total})"
         )
 
 
 class WebhookDispatcher:
-    """Sends an alert to every registered WebhookNotifier and collects results."""
+    """Send an alert to every registered WebhookNotifier and aggregate results."""
 
-    def __init__(self, notifiers: List[WebhookNotifier] | None = None) -> None:
-        self._notifiers: List[WebhookNotifier] = list(notifiers or [])
+    def __init__(self, notifiers: List[WebhookNotifier]) -> None:
+        self._notifiers = list(notifiers)
 
-    def add(self, notifier: WebhookNotifier) -> None:
-        """Register an additional notifier."""
+    def add_notifier(self, notifier: WebhookNotifier) -> None:
         self._notifiers.append(notifier)
 
     def dispatch(self, alert: Alert) -> DispatchResult:
-        """Send *alert* to all registered notifiers.
-
-        Returns a :class:`DispatchResult` summarising successes and failures.
-        """
-        total = len(self._notifiers)
         succeeded = 0
-        failures: List[str] = []
+        failed = 0
+        errors: List[str] = []
 
         for notifier in self._notifiers:
             try:
                 ok = notifier.send(alert)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 ok = False
-                logger.exception(
-                    "Unhandled error dispatching to %s: %s", notifier.url, exc
-                )
+                errors.append(f"{notifier.url}: {exc}")
 
             if ok:
                 succeeded += 1
             else:
-                failures.append(notifier.url)
-                logger.warning(
-                    "Webhook dispatch failed for job '%s' → %s",
-                    alert.job_name,
-                    notifier.url,
-                )
+                failed += 1
+                if not errors or errors[-1].startswith(notifier.url):
+                    pass  # error already recorded above
+                else:
+                    errors.append(f"{notifier.url}: returned failure")
 
-        result = DispatchResult(
-            total=total,
+        return DispatchResult(
+            job_name=alert.job_name,
+            total=len(self._notifiers),
             succeeded=succeeded,
-            failed=len(failures),
-            failures=failures,
+            failed=failed,
+            errors=errors,
         )
-        logger.debug("Dispatch result: %r", result)
-        return result
+
+    def dispatch_all(self, alerts: List[Alert]) -> List[DispatchResult]:
+        return [self.dispatch(a) for a in alerts]
