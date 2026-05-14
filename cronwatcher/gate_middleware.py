@@ -41,10 +41,12 @@ class GateMiddleware:
             job_name, pid=self._pid, timeout_seconds=self._timeout
         )
         if not acquired:
+            existing_lock = self._gate.get_lock(job_name)
+            existing_pid = existing_lock.pid if existing_lock else None
             logger.warning(
                 "[gate] Skipping %r — already locked (pid=%s)",
                 job_name,
-                self._gate.get_lock(job_name) and self._gate.get_lock(job_name).pid,
+                existing_pid,
             )
             return False
 
