@@ -58,3 +58,15 @@ class JobTagger:
     def all_tags(self) -> List[str]:
         """Return a sorted list of every tag that is currently in use."""
         return self._index.all_tags()
+
+    def jobs_without_tags(self) -> List[str]:
+        """Return job names that have no tags assigned.
+
+        Useful for auditing a registry to find jobs that have not yet
+        been categorised.
+        """
+        return [
+            name
+            for name in self._registry.all_names()
+            if not self._index.tags_for_job(name)
+        ]
