@@ -1,64 +1,63 @@
-"""DependencyChecker: integrates DependencyGraph with HeartbeatTracker to
-validate that upstream jobs have run before a downstream job is allowed."""
 from __future__ import annotations
 
-import logging
-from typing import List, Optional, Set
+from dataclasses import dataclass, field
+from typing import List, Optional
 
-from cronwatcher.alerting import Alert, AlertManager
-from cronwatcher.heartbeat import HeartbeatTracker
 from cronwatcher.job_dependency import DependencyGraph, DependencyViolation
+from cronwatcher.heartbeat import HeartbeatTracker
 
-logger = logging.getLogger(__name__)
+
+@dataclass
+class CheckResult:
+    job_name: str
+    violations: List[DependencyViolation] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return len(self.violations) == 0
+
+    def __repr__(self) -> str:
+        if self.passed:
+            return f"CheckResult({self.job_name!r}: OK)"
+        names = ", ".join(v.upstream for v in self.violations)
+        return f"CheckResult({self.job_name!r}: BLOCKED by [{names}])"
 
 
 class DependencyChecker:
-    """Checks whether a job's upstream dependencies have been seen recently."""
+    """Checks whether upstream dependencies have completed before a job runs."""
 
     def __init__(
         self,
         graph: DependencyGraph,
         tracker: HeartbeatTracker,
-        alert_manager: AlertManager,
+        max_staleness_seconds: float = 3600.0,
     ) -> None:
         self._graph = graph
         self._tracker = tracker
-        self._alert_manager = alert_manager
+        self._max_staleness = max_staleness_seconds
 
-    def _completed_jobs(self) -> Set[str]:
-        """Return the set of jobs that have at least one recorded heartbeat."""
-        return {
-            name
-            for name in self._tracker.all_jobs()
-            if self._tracker.last_seen(name) is not None
-        }
+    def _completed_jobs(self) -> set:
+        """Return job names that have a recent heartbeat within staleness window."""
+        completed = set()
+        for name, record in self._tracker.all_records().items():
+            if record.last_seen is not None:
+                import time
+                age = time.time() - record.last_seen
+                if age <= self._max_staleness:
+                    completed.add(name)
+        return completed
 
-    def check(self, job_name: str) -> Optional[DependencyViolation]:
-        """Check upstream deps for *job_name*; fire an alert if any are unmet.
-
-        Returns the violation if one exists, otherwise None.
-        """
+    def check(self, job_name: str) -> CheckResult:
+        """Check whether all upstream dependencies of *job_name* have completed."""
+        upstreams = self._graph.upstream_jobs(job_name)
         completed = self._completed_jobs()
-        violation = self._graph.check_violations(job_name, completed)
-        if violation:
-            missing = ", ".join(violation.missing_upstream)
-            alert = Alert(
-                job_name=job_name,
-                kind="dependency_violation",
-                message=(
-                    f"Job '{job_name}' cannot run: upstream jobs not completed: {missing}"
-                ),
-                last_seen=self._tracker.last_seen(job_name),
-            )
-            self._alert_manager.handle(alert)
-            logger.warning("Dependency violation for %s: missing %s", job_name, missing)
-        return violation
+        violations = [
+            DependencyViolation(upstream=up, downstream=job_name)
+            for up in upstreams
+            if up not in completed
+        ]
+        return CheckResult(job_name=job_name, violations=violations)
 
-    def check_all(self) -> List[DependencyViolation]:
-        """Check all jobs registered in the dependency graph."""
-        violations: List[DependencyViolation] = []
-        for job_name in self._graph.all_jobs():
-            result = self.check(job_name)
-            if result:
-                violations.append(result)
-        return violations
+    def check_all(self, job_names: List[str]) -> List[CheckResult]:
+        """Run dependency checks for every job in *job_names*."""
+        return [self.check(name) for name in job_names]
